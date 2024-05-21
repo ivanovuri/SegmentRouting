@@ -1,166 +1,176 @@
-# Segement Routing confguration examples
+# Segement Routing non-colored explicit path LSP
 
-Segment Routing is one of the latest technologies that really represents something new in core computer networks. This repository is represented by various branches that relate to different topics. Here you see branch where only basic SR routing is configured with several VRFs for demonstrations.
-
-This repository is represented baranch is dedicated to **TI-LFA**. To enable we need to be shure our device more than provided 3 label stack by default. So first of all we need to enable deep label stack with maximum-labels configuration stranza. Only after that we can protect our links with TI-LFA.
+Time to look at non-colored LSP. No controller so I will use the manual approach where we configure anything via CLI. Here I'll use sBFP so we need to make shure sbfd local-discriminator the same on both sides.
 
 ## Configuration
-Configure basic ISIS with SR enables. SRG range is default directly from Segment Routing book. Here you can see only L2 ISIS domain with wide metrics enabled which is a prerequisite for correct SR operation.
+
+The only routers where we need to configure something is headend router R1 and destination R2. Here I'll use Adj-SID to steer traffic via less preferred path. Adj-SID will not preserve between reboots, so please make sure you use the correct numbers. Also, lets use sBFD to speedup in case of failures.
+
+Headend confgiration on R1
 ```
-isis {
-    interface all {
-        point-to-point;
+root@R1# show protocols 
+source-packet-routing {
+    segment-list Path-via-300-and-R7 {
+        hop1 ip-address 172.16.13.3;
+        hop2 label 16105;
+        hop3 label 17;
+        hop4 label 16107;
+        hop5 label 16102;
     }
-    interface lo0.0 {
-        passive;
+    segment-list Path-via-100-and-R8 {
+        hop1 ip-address 172.16.13.3;    
+        hop2 label 16105;
+        hop3 label 16;
+        hop4 label 16108;
+        hop5 label 16102;
     }
-    source-packet-routing {             
-        srgb start-label 16000 index-range 8000;
-    }
-    level 1 disable;
-    level 2 wide-metrics-only;
-    export Node-SID;
-}
-/* vMX only stranza to get SR working */
-chassis {
-    network-services enhanced-ip;
-}
-``` 
-In this lab I'll use policy to confgire Node-SID:
-```
-policy-options {
-    policy-statement Node-SID {
-        from {
-            interface lo0.0;
-            route-filter 1.0.0.0/32 exact;
-        }
-        then {
-            prefix-segment {
-                index 101;
-                node-segment;
+    source-routing-path R2-Detour {
+        to 2.0.0.0;
+        binding-sid 1000008;
+        primary {
+            Path-via-300-and-R7 {
+                bfd-liveness-detection {
+                    sbfd {
+                        remote-discriminator 2;
+                    }
+                    minimum-interval 1000;
+                    multiplier 3;
+                }
             }
-            accept;
-        }}}
+        }
+        secondary {
+            Path-via-100-and-R8 {
+                bfd-liveness-detection {
+                    sbfd {              
+                        remote-discriminator 2;
+                    }
+                    minimum-interval 1000;
+                    multiplier 3;
+                }
+            }
+        }
+    }
+}
 ```
-In case you don't want to mess with policies Index-SID can be configured inside protocol isis confgiration section:
+
+Tailend configuration R2. Nothing special needed but sBFP parameter:
 ```
-set protocols isis source-packet-routing node-segment ipv4-index 101
+root@R2> show configuration protocols 
+bfd {
+    sbfd {
+        local-discriminator 2;
+    }
+}
 ```
 
 ## Verification
-Check SR is enabled in ISIS. Find SPRING section:
+
+First of all check is LSP is in Up state.
 ```
-root@R1> show isis overview 
-Instance: master
-  Router ID: 1.0.0.0
-  Hostname: R1
-  Sysid: 0000.0000.0001
-  Areaid: 49.0007
-  Adjacency holddown: enabled
-  Maximum Areas: 3
-  LSP life time: 1200
-  Attached bit evaluation: enabled
-  SPF delay: 200 msec, SPF holddown: 5000 msec, SPF rapid runs: 3
-  IPv4 is enabled, IPv6 is enabled, SPRING based MPLS is enabled
-  Traffic engineering: enabled
-  Traffic engineering v6: disabled
-  Restart: Disabled
-    Helper mode: Enabled
-  Layer2-map: Disabled
-  Source Packet Routing (SPRING): Enabled
-    SRGB Config Range :
-      SRGB Start-Label : 16000, SRGB Index-Range : 8000
-    SRGB Block Allocation: Success
-      SRGB Start Index : 16000, SRGB Size : 8000, Label-Range: [ 16000, 23999 ]
-    Node Segments: Disabled
-    SRv6: Disabled
-  Post Convergence Backup: Enabled      
-    Max labels: 3, Max spf: 100, Max Ecmp Backup: 1
-  Level 1
-    Internal route preference: 15
-    External route preference: 160
-    Prefix export count: 0
-    Wide metrics are enabled, Narrow metrics are enabled
-    Source Packet Routing is enabled
-  Level 2
-    Internal route preference: 18
-    External route preference: 165
-    Prefix export count: 0
-    Wide metrics are enabled
-    Source Packet Routing is enabled
+[edit]
+root@R1# run show spring-traffic-engineering lsp          
+To              State     LSPname
+2.0.0.0         Up        R2-Detour
+
+
+Total displayed LSPs: 1 (Up: 1, Down: 0)
 ```
-New information should be presend inside ISIS database. Find IPV4 Index, SPRING and Adj-SID sections:
+
+Same LSP but much more detailed than above.
 ```
-root@R1> show isis database extensive R7 
-IS-IS level 1 link-state database:
+[edit]
+root@R1# run show spring-traffic-engineering lsp detail 
+Name: R2-Detour
+  Tunnel-source: Static configuration
+  Tunnel Forward Type: SRMPLS
+  To: 2.0.0.0
+  Te-group-id: 0
+  State: Up
+    Path: Path-via-300-and-R7
+    Path Status: NA
+    Outgoing interface: ge-0/0/1.0
+    Auto-translate status: Disabled Auto-translate result: N/A
+    Compute Status:Disabled , Compute Result:N/A , Compute-Profile Name:N/A
+    BFD status: Up BFD name: V4-srte_bfd_session-7
+    BFD remote-discriminator: 2(configured)
+    Segment ID : 128 
+    ERO Valid: true
+      SR-ERO hop count: 5
+        Hop 1 (Strict): 
+          NAI: IPv4 Adjacency ID, 0.0.0.0 -> 172.16.13.3
+          SID type: None
+        Hop 2 (Strict): 
+          NAI: None
+          SID type: 20-bit label, Value: 16105
+        Hop 3 (Strict): 
+          NAI: None                     
+          SID type: 20-bit label, Value: 17
+        Hop 4 (Strict): 
+          NAI: None
+          SID type: 20-bit label, Value: 16107
+        Hop 5 (Strict): 
+          NAI: None
+          SID type: 20-bit label, Value: 16102
+    Path: Path-via-100-and-R8
+    Path Status: NA
+    Outgoing interface: ge-0/0/1.0
+    Auto-translate status: Disabled Auto-translate result: N/A
+    Compute Status:Disabled , Compute Result:N/A , Compute-Profile Name:N/A
+    BFD status: Up BFD name: V4-srte_bfd_session-8
+    BFD remote-discriminator: 2(configured)
+    Segment ID : 256 
+    ERO Valid: true
+      SR-ERO hop count: 5
+        Hop 1 (Strict): 
+          NAI: IPv4 Adjacency ID, 0.0.0.0 -> 172.16.13.3
+          SID type: None
+        Hop 2 (Strict): 
+          NAI: None
+          SID type: 20-bit label, Value: 16105
+        Hop 3 (Strict): 
+          NAI: None
+          SID type: 20-bit label, Value: 16
+        Hop 4 (Strict): 
+          NAI: None
+          SID type: 20-bit label, Value: 16108
+        Hop 5 (Strict): 
+          NAI: None
+          SID type: 20-bit label, Value: 16102
 
-IS-IS level 2 link-state database:
 
-R7.00-00 Sequence: 0x7, Checksum: 0xa1c6, Lifetime: 686 secs
-  IPV4 Index: 107
-  Node Segment Blocks Advertised:
-    Start Index : 0, Size : 8000, Label-Range: [ 16000, 23999 ]
-   IS neighbor: R2.00                         Metric:       10
-     Two-way fragment: R2.00-00, Two-way first fragment: R2.00-00
-     P2P IPv4 Adj-SID:      16, Weight:   0, Flags: --VL--
-   IS neighbor: R4.00                         Metric:       10
-     Two-way fragment: R4.00-00, Two-way first fragment: R4.00-00
-     P2P IPv4 Adj-SID:      17, Weight:   0, Flags: --VL--
-   IP prefix: 7.0.0.0/32                      Metric:        0 Internal Up
-   IP prefix: 172.16.27.0/27                  Metric:       10 Internal Up
-   IP prefix: 172.16.47.0/27                  Metric:       10 Internal Up
+Total displayed LSPs: 1 (Up: 1, Down: 0)
+```
 
-  Header: LSP ID: R7.00-00, Length: 213 bytes
-    Allocated length: 284 bytes, Router ID: 7.0.0.0
-    Remaining lifetime: 686 secs, Level: 2, Interface: 336
-    Estimated free bytes: 115, Actual free bytes: 71
-    Aging timer expires in: 686 secs
-    Protocols: IP, IPv6                 
+Also sBFS should be in Up state too. In our case, we should see two sessions:
+```
+[edit]
+root@R1# run show spring-traffic-engineering sbfd           
+BFDname                  State
+V4-srte_bfd_session-7    Up       
+V4-srte_bfd_session-8    Up    
+```
 
-  Packet: LSP ID: R7.00-00, Length: 213 bytes, Lifetime : 1196 secs
-    Checksum: 0xa1c6, Sequence: 0x7, Attributes: 0x3 <L1 L2>
-    NLPID: 0x83, Fixed length: 27 bytes, Version: 1, Sysid length: 0 bytes
-    Packet type: 20, Packet version: 1, Max area: 0
+After all, don't forget to check for a new route in inet.3.
+```
+root@R1# run show route 2 
 
-  TLVs:
-    Area address: 49.0007 (3)
-    LSP Buffer Size: 1492
-    Speaks: IP
-    Speaks: IPV6
-    IP router id: 7.0.0.0
-    IP address: 7.0.0.0
-    Hostname: R7
-    IP extended prefix: 7.0.0.0/32 metric 0 up
-      8 bytes of subtlvs
-      Node SID, Flags: 0x40(R:0,N:1,P:0,E:0,V:0,L:0), Algo: SPF(0), Value: 107
-    IP extended prefix: 172.16.27.0/27 metric 10 up
-    IP extended prefix: 172.16.47.0/27 metric 10 up
-    Router Capability:  Router ID 7.0.0.0, Flags: 0x00
-      SPRING Capability - Flags: 0xc0(I:1,V:1), Range: 8000, SID-Label: 16000
-      SPRING Algorithm - Algo: 0
-      SPRING Algorithm - Algo: 1        
-      Node MSD Advertisement Sub-TLV:Type:  23, Length: 4
-        Base MPLS Imposition MSD:Type:  1, Value: 15
-        Entropy Readable Label Depth MSD:Type:  2, Value: 16
-    Extended IS Reachability TLV, Type: 22, Length: 88
-    IS extended neighbor: R2.00, Metric: default 10 SubTLV len: 33
-      IP address: 172.16.27.7
-      Neighbor's IP address: 172.16.27.2
-      Local interface index: 334, Remote interface index: 336
-      Link MSD Advertisement Sub-TLV:Type: 15, Length: 2
-        Base MPLS Imposition MSD:Type: 1, Value: 15
-      P2P IPV4 Adj-SID - Flags:0x30(F:0,B:0,V:1,L:1,S:0,P:0), Weight:0, Label: 16
-      P2P IPv4 Adj-SID:      16, Weight:   0, Flags: --VL--
-    IS extended neighbor: R4.00, Metric: default 10 SubTLV len: 33
-      IP address: 172.16.47.7
-      Neighbor's IP address: 172.16.47.4
-      Local interface index: 337, Remote interface index: 337
-      Link MSD Advertisement Sub-TLV:Type: 15, Length: 2
-        Base MPLS Imposition MSD:Type: 1, Value: 15
-      P2P IPV4 Adj-SID - Flags:0x30(F:0,B:0,V:1,L:1,S:0,P:0), Weight:0, Label: 17
-      P2P IPv4 Adj-SID:      17, Weight:   0, Flags: --VL--
-  No queued transmissions 
+inet.0: 21 destinations, 21 routes (21 active, 0 holddown, 0 hidden)
++ = Active Route, - = Last Active, * = Both
+
+2.0.0.0/32         *[IS-IS/18] 00:14:33, metric 10
+                    >  to 172.16.12.2 via ge-0/0/0.0
+                       to 172.16.13.3 via ge-0/0/1.0, Push 16, Push 16105(top)
+
+inet.3: 7 destinations, 8 routes (7 active, 0 holddown, 0 hidden)
++ = Active Route, - = Last Active, * = Both
+
+2.0.0.0/32         *[SPRING-TE/8] 00:00:26, metric 1, metric2 10
+                    >  to 172.16.13.3 via ge-0/0/1.0, Push 16102, Push 16107, Push 17, Push 16105(top)
+                       to 172.16.13.3 via ge-0/0/1.0, Push 16102, Push 16108, Push 16, Push 16105(top)
+                    [L-ISIS/14] 00:14:33, metric 10
+                    >  to 172.16.12.2 via ge-0/0/0.0
+                       to 172.16.13.3 via ge-0/0/1.0, Push 16102, Push 16, Push 16105(top)
 ```
 
 ## Additional information
-The idea behind SR is to compose and stack those segments to create a wider path. Here no paths exists all othe topics will be covered in different branches inside this repo.
+Keep in mind that sBFD protects only in case Node failures or if link with Adj-SID goes down. Only after that sBFP session goes down and steers traffic to secondary path.
